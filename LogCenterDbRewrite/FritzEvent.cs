@@ -5,7 +5,7 @@ namespace Sqlite.Synology.LogCenter
 {
     struct FritzEvent
     {
-        readonly long id;
+        internal readonly long id;
         public readonly string host;
         public readonly string ip;
         public readonly string facility;
@@ -25,9 +25,9 @@ namespace Sqlite.Synology.LogCenter
         public readonly DateTime RecordedTime;
 
         
-        public FritzEvent(SqliteDataReader reader)
+        public FritzEvent(SqliteDataReader reader, long multiTableOffset=0)
         {
-             id = (long)reader.GetValue(logs.id);
+            id = (long)reader.GetValue(logs.id) + multiTableOffset;
             host = (string)reader.GetValue(logs.host);
             ip = (string)reader.GetValue(logs.ip);
             facility = (string)reader.GetValue(logs.fac);

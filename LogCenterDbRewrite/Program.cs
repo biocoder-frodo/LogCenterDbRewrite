@@ -10,7 +10,7 @@ namespace Sqlite.Synology.LogCenter
     class Program
     {
         private static readonly string fields = ((logs[])Enum.GetValues(typeof(logs))).Select(f => f.ToString()).Aggregate("", (s, a) => $"{a},{s}", (a) => a.Substring(0, a.Length - 1));
-
+        private static readonly Regex regexrepeatsFilter = new Regex(@"^(?<message>.*)\s+\[(?<count>[0-9]+) messages since (?<d1>[0-9]{2}).(?<d2>[0-9]{2}).(?<d3>[0-9]{2})\s+(?<ts>[0-9]{2}:[0-9]{2}:[0-9]{2})\]$", RegexOptions.Compiled);
         static void Main(string[] args)
         {
             var input = new List<FileInfo>();
@@ -61,8 +61,11 @@ namespace Sqlite.Synology.LogCenter
 
             using (var parsed = new StreamWriter(parsedCsv.FullName))
             {
+                long offset = 0;
+                long lastId;
                 foreach (var src in input)
                 {
+
                     using (var con = OpenDatabase(src))
                     {
                         var cmd = new SqliteCommand("select * from logs order by utcsec, r_utcsec, ID", con);
@@ -71,27 +74,74 @@ namespace Sqlite.Synology.LogCenter
                         _ = GetHostNameFromFile(src, out exportCsv, out FileInfo _);
                         using (var export = new StreamWriter(exportCsv.FullName))
                         {
-                            ReadRows(reader, messages, export);
+                            ReadRows(reader, messages, offset, out lastId, export);
                         }
 
                     }
+
+                    offset += 100 + lastId;
                 }
 
+                var cached = new List<FritzEvent>();
+                var repeats = new List<FritzRepeatedEvent>();
+                var lastRepeats = new Dictionary<string, FritzRepeatedEvent>();
                 FritzEvent previous = default;
+
+                foreach (var day in messages.Keys.OrderBy(d => d))
+                {
+                    foreach (var m in messages[day].Values.OrderBy(row => row.SortOrder))
+                    {
+                        // duplicates due to firmware bug, message retrieval was time dependant
+                        if ((previous.program == m.program && previous.message == m.message && previous.host == m.host && previous.ip == m.ip
+                            && previous.utcsec == m.utcsec - 1) == false)
+                        {
+                            cached.Add(m);
+
+                            Match match = regexrepeatsFilter.Match(m.message);
+
+                            if (match.Success)
+                            {
+
+                                var repeat = new FritzRepeatedEvent(match, m, cached);
+                                repeats.Add(repeat);
+                                if (lastRepeats.ContainsKey(repeat.Key) == false)
+                                {
+                                    lastRepeats.Add(repeat.Key, repeat);
+                                }
+                                else
+                                {
+                                    if (lastRepeats[repeat.Key].count < repeat.count) lastRepeats[repeat.Key] = repeat;
+                                }
+                            }
+                        }
+                        previous = m;
+                    }
+                }
+
+                foreach (var m in repeats)
+                {
+                    if (m.firstId.HasValue)
+                    {
+                        Console.WriteLine($"message #{m.count}: firstId {m.firstId.Value}");
+
+                        cached.Remove(cached.SingleOrDefault(r => r.id == m.firstId.Value));
+                    }
+
+                    if (lastRepeats[m.Key].count != m.count)
+                    {
+                        Console.WriteLine($"message #{m.count} superseded by #{lastRepeats[m.Key].count}");
+                        Console.WriteLine($"message #{m.count}: id {m.id}");
+
+                        cached.Remove(cached.Single(r => r.id == m.id));
+                    }
+                }
+
                 using (var target = OpenDatabase(dest))
                 {
-                    foreach (var day in messages.Keys.OrderBy(d => d))
+                    foreach (var m in cached)
                     {
-                        foreach (var m in messages[day].Values.OrderBy(row => row.SortOrder))
-                        {
-                            // duplicates due to firmware bug, message retrieval was time dependant
-                            if ((previous.message == m.message && previous.host == m.host && previous.ip == m.ip && previous.utcsec == m.utcsec - 1) == false)
-                            {
-                                m.WriteRow(target, newid++);
-                                parsed?.WriteLine($"{m.LocalTime.ToString("yyyy-MM-ddTHH:mm:ss")};{m.host};{m.ip};{m.message}");
-                            }
-                            previous = m;
-                        }
+                        m.WriteRow(target, newid++);
+                        parsed?.WriteLine($"{m.LocalTime.ToString("yyyy-MM-ddTHH:mm:ss")};{m.host};{m.ip};{m.message}");
                     }
                     VacuumDatabase(target);
                 }
@@ -115,10 +165,10 @@ namespace Sqlite.Synology.LogCenter
             }
             return false;
         }
-        private static void ReadRows(SqliteDataReader reader, Dictionary<int, Dictionary<string, FritzEvent>> messages, StreamWriter export = null)
+        private static void ReadRows(SqliteDataReader reader, Dictionary<int, Dictionary<string, FritzEvent>> messages, long multiTableOffset, out long lastId, StreamWriter export = null)
         {
             DateTime ts = default;
-
+            lastId = multiTableOffset;
             if (reader.HasRows)
             {
                 for (int i = 0; i < reader.FieldCount; i++)
@@ -159,7 +209,8 @@ namespace Sqlite.Synology.LogCenter
                     }
 
 
-                    var m = new FritzEvent(reader);
+                    var m = new FritzEvent(reader, multiTableOffset);
+                    if (lastId < m.id) lastId = m.id;
 
                     if (messages.ContainsKey(m.DateNumber) == false) messages.Add(m.DateNumber, new Dictionary<string, FritzEvent>());
                     if (messages[m.DateNumber].ContainsKey(m.Key) == false)
