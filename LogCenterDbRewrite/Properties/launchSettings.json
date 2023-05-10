@@ -2,7 +2,7 @@
   "profiles": {
     "LogCenterDatabase": {
       "commandName": "Project",
-      "commandLineArgs": "logs\\fritz.box\\SYNOSYSLOGDB_fritz.box.DB logs\\fritz.box\\2019-12-26_1933-11-25.DB"
+      "commandLineArgs": "dlh logs\\fritz.box\\SYNOSYSLOGDB_fritz.box.DB logs\\fritz.box\\2019-12-26_1933-11-25.DB"
     }
   }
 }

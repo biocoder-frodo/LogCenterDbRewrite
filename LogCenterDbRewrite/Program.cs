@@ -13,21 +13,22 @@ namespace Sqlite.Synology.LogCenter
         private static readonly Regex regexrepeatsFilter = new Regex(@"^(?<message>.*)\s+\[(?<count>[0-9]+) messages since (?<d1>[0-9]{2}).(?<d2>[0-9]{2}).(?<d3>[0-9]{2})\s+(?<ts>[0-9]{2}:[0-9]{2}:[0-9]{2})\]$", RegexOptions.Compiled);
         static void Main(string[] args)
         {
-            var input = new List<FileInfo>();
 
-            if (args.Length > 0)
+            bool dlh = false;
+
+            var input = new List<FileInfo>();
+            var startInfo = new Queue<string>(args);
+            if (startInfo.TryPeek(out string arg))
             {
-                foreach (var arg in args)
+                if (arg.ToLowerInvariant().Equals("dsl-link-history") || arg.ToLowerInvariant().Equals("dlh"))
                 {
-                    input.Add(new FileInfo(arg));
+                    dlh = true;
+                    _ = startInfo.Dequeue();
                 }
             }
-            else
+            while (startInfo.Count > 0)
             {
-                input.Add(new FileInfo("SYNOSYSLOGDB_fritz.box.DB"));
-            }
-            foreach (FileInfo db in input)
-            {
+                var db = new FileInfo(startInfo.Dequeue());
                 if (db.Exists == false)
                 {
                     Console.WriteLine($"Your input database '{db.FullName}' could not be found.");
@@ -38,12 +39,12 @@ namespace Sqlite.Synology.LogCenter
                     Console.WriteLine($"Your input database '{db.FullName}' is not a LogCenter database or could not be read.");
                     return;
                 }
+                input.Add(db);
             }
+            if (input.Count == 0) input.Add(new FileInfo("SYNOSYSLOGDB_fritz.box.DB"));
 
-            if (input.Any() == false) return;
-
-
-            if (GetHostNameFromFile(input.First(), out FileInfo exportCsv, out FileInfo parsedCsv) == false)
+            string hostName;
+            if (GetHostNameFromFile(input.First(), out FileInfo exportCsv, out FileInfo parsedCsv, out hostName) == false)
             {
                 Console.WriteLine($"The first input database should have your Fritz's hostname in the filename.");
                 return;
@@ -71,7 +72,7 @@ namespace Sqlite.Synology.LogCenter
                         var cmd = new SqliteCommand("select * from logs order by utcsec, r_utcsec, ID", con);
                         var reader = cmd.ExecuteReader();
 
-                        _ = GetHostNameFromFile(src, out exportCsv, out FileInfo _);
+                        _ = GetHostNameFromFile(src, out exportCsv, out FileInfo _, out string _);
                         using (var export = new StreamWriter(exportCsv.FullName))
                         {
                             ReadRows(reader, messages, offset, out lastId, export);
@@ -146,11 +147,33 @@ namespace Sqlite.Synology.LogCenter
                     VacuumDatabase(target);
                 }
 
+                if (dlh)
+                {
+                    var rates = new Regex(@"^.*DSL synchronization established with (?<dlrate>[0-9]+)\/(?<ulrate>[0-9]+)\s+kbit\/s.*$", RegexOptions.Compiled);
+                    using (var sw = new StreamWriter($"{hostName}.dsl-link-history.csv"))
+                    {
+                        sw.WriteLine("timestamp\tdownload(kbit/s)\tupload(kbit/s)");
+
+                        foreach (var m in cached.Where(m =>m.message.Contains("synchronization established")))
+                        {
+                            var speeds = rates.Match(m.message);
+                            if (speeds.Success)
+                                sw.WriteLine($"{m.LocalTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")}\t{speeds.Groups["dlrate"]}\t{speeds.Groups["ulrate"]}");
+                            else
+                            {
+                                Console.WriteLine();
+                            }
+                        }
+
+                    }
+                }
+
             }
 
         }
-        static bool GetHostNameFromFile(FileInfo fileInfo, out FileInfo exportCsv, out FileInfo parsedCsv)
+        static bool GetHostNameFromFile(FileInfo fileInfo, out FileInfo exportCsv, out FileInfo parsedCsv, out string name)
         {
+            name = string.Empty;
             Regex hostName = new Regex(@"^.*SYNOSYSLOGDB_(.*)\.DB$");
 
             parsedCsv = new FileInfo(fileInfo.FullName + ".parsed.csv");
@@ -159,8 +182,9 @@ namespace Sqlite.Synology.LogCenter
             var match = hostName.Match(fileInfo.FullName);
             if (match.Success)
             {
-                parsedCsv = new FileInfo(Path.Combine(fileInfo.DirectoryName, match.Groups[1].Value + ".syslog.parsed.csv"));
-                exportCsv = new FileInfo(Path.Combine(fileInfo.DirectoryName, match.Groups[1].Value + ".syslog.csv"));
+                name = match.Groups[1].Value;
+                parsedCsv = new FileInfo(Path.Combine(fileInfo.DirectoryName, name + ".syslog.parsed.csv"));
+                exportCsv = new FileInfo(Path.Combine(fileInfo.DirectoryName, name + ".syslog.csv"));
                 return true;
             }
             return false;
