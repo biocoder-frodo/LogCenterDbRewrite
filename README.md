@@ -3,7 +3,7 @@
 
 If you have left FRITZBox-SynologyLogCenterDaemon running for a long time, you may find that the database has grown very large and that some sections of logs are repeated over and over again.
 
-This offline tool let's you reprocess the database so that 
+This offline tool lets you reprocess the database so that 
 * duplicate entries are removed
 * startup events with a timestamp in 2070 are adjusted to the time of recording
 * repeated events are trimmed, only the last occurence will appear in the database
