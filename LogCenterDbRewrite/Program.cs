@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Linq;
+using System.Reflection;
 
 namespace Sqlite.Synology.LogCenter
 {
@@ -11,6 +12,26 @@ namespace Sqlite.Synology.LogCenter
     {
         private static readonly string fields = ((logs[])Enum.GetValues(typeof(logs))).Select(f => f.ToString()).Aggregate("", (s, a) => $"{a},{s}", (a) => a.Substring(0, a.Length - 1));
         private static readonly Regex regexrepeatsFilter = new Regex(@"^(?<message>.*)\s+\[(?<count>[0-9]+) messages since (?<d1>[0-9]{2}).(?<d2>[0-9]{2}).(?<d3>[0-9]{2})\s+(?<ts>[0-9]{2}:[0-9]{2}:[0-9]{2})\]$", RegexOptions.Compiled);
+
+        static bool CheckFile(FileInfo db)
+        {
+            if (db.Exists)
+            {
+                if (IsLogCenterDb(db))
+                {
+                    return true;
+                }
+                else
+                {
+                    Console.WriteLine($"Your input database '{db.FullName}' is not a LogCenter database or could not be read.");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"Your input database '{db.FullName}' could not be found.");
+            }
+            return false;
+        }
         static void Main(string[] args)
         {
 
@@ -18,40 +39,52 @@ namespace Sqlite.Synology.LogCenter
 
             var input = new List<FileInfo>();
             var startInfo = new Queue<string>(args);
-            if (startInfo.TryPeek(out string arg))
-            {
-                if (arg.ToLowerInvariant().Equals("dsl-link-history") || arg.ToLowerInvariant().Equals("dlh"))
-                {
-                    dlh = true;
-                    _ = startInfo.Dequeue();
-                }
-            }
+
             while (startInfo.Count > 0)
             {
-                var db = new FileInfo(startInfo.Dequeue());
-                if (db.Exists == false)
+                if (startInfo.TryPeek(out string arg))
                 {
-                    Console.WriteLine($"Your input database '{db.FullName}' could not be found.");
-                    return;
+                    switch (arg.ToLowerInvariant())
+                    {
+                        case "dsl-link-history":
+                        case "dlh":
+
+                            dlh = true;
+                            _ = startInfo.Dequeue();
+                            break;
+
+                        case "--help":
+                        case "--?":
+                            Console.WriteLine($"Usage : ./LogCenterRewrite [[database] database2 ....] options");
+                            Console.WriteLine("Options:");
+                            Console.WriteLine("dlh, dsl-link-history\t\tExports the link speed history of your DSL connection.");
+                            return;
+                    }
                 }
-                if (IsLogCenterDb(db) == false)
+                if (startInfo.Count > 0)
                 {
-                    Console.WriteLine($"Your input database '{db.FullName}' is not a LogCenter database or could not be read.");
-                    return;
+                    var dbArg = new FileInfo(startInfo.Dequeue());
+
+                    if (CheckFile(dbArg) == false) return;
+
+                    input.Add(dbArg);
                 }
-                input.Add(db);
             }
             if (input.Count == 0) input.Add(new FileInfo("SYNOSYSLOGDB_fritz.box.DB"));
 
+            var db = input.First();
+
+            if (CheckFile(db) == false) return;
+
             string hostName;
-            if (GetHostNameFromFile(input.First(), out FileInfo exportCsv, out FileInfo parsedCsv, out hostName) == false)
+            if (GetHostNameFromFile(db, out FileInfo exportCsv, out FileInfo parsedCsv, out hostName) == false)
             {
                 Console.WriteLine($"The first input database should have your Fritz's hostname in the filename.");
                 return;
             }
 
-            var dest = new FileInfo(input.First().FullName + ".processed.DB");
-            input.First().CopyTo(dest.FullName, true);
+            var dest = new FileInfo(db.FullName + ".processed.DB");
+            db.CopyTo(dest.FullName, true);
 
 
             var messages = new Dictionary<int, Dictionary<string, FritzEvent>>();
@@ -154,7 +187,7 @@ namespace Sqlite.Synology.LogCenter
                     {
                         sw.WriteLine("timestamp\tdownload(kbit/s)\tupload(kbit/s)");
 
-                        foreach (var m in cached.Where(m =>m.message.Contains("synchronization established")))
+                        foreach (var m in cached.Where(m => m.message.Contains("synchronization established")))
                         {
                             var speeds = rates.Match(m.message);
                             if (speeds.Success)
