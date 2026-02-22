@@ -49,3 +49,5 @@ You can also specify the folder where the database file is stored:
 .\LogCenterDbRewrite.exe fritz fritz.box
 >
 ```
+
+
