@@ -5,39 +5,51 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 
 namespace Sqlite.Synology.LogCenter
 {
     class Program
     {
-        private static readonly string fields = ((logs[])Enum.GetValues(typeof(logs))).Select(f => f.ToString()).Aggregate("", (s, a) => $"{a},{s}", (a) => a.Substring(0, a.Length - 1));
-        private static readonly Regex regexrepeatsFilter = new Regex(@"^(?<message>.*)\s+\[(?<count>[0-9]+) messages since (?<d1>[0-9]{2}).(?<d2>[0-9]{2}).(?<d3>[0-9]{2})\s+(?<ts>[0-9]{2}:[0-9]{2}:[0-9]{2})\]$", RegexOptions.Compiled);
+        private static string SynoSysLogDb(string name) => $"SYNOSYSLOGDB_{name}.DB";
+        private static readonly Regex regexHostName = new Regex(@"^.*" + SynoSysLogDb(@"(.*)\") + "$", RegexOptions.Compiled);
 
-        static bool CheckFile(FileInfo db)
+        private static readonly Regex regexRepeatsFilter = new Regex(@"^(?<message>.*)\s+\[(?<count>[0-9]+) messages since (?<d1>[0-9]{2}).(?<d2>[0-9]{2}).(?<d3>[0-9]{2})\s+(?<ts>[0-9]{2}:[0-9]{2}:[0-9]{2})\]$", RegexOptions.Compiled);
+
+        static (bool, FileInfo) CheckFile(string fileSpec)
         {
-            if (db.Exists)
+            FileInfo db = null;
+            try
             {
-                if (IsLogCenterDb(db))
+                db = new FileInfo(GetExactPathName(fileSpec));
+                if (File.GetAttributes(db.FullName).HasFlag(FileAttributes.Directory))
+                    db = new FileInfo(Path.Combine(db.FullName, SynoSysLogDb(db.Name)));
+
+                if (db.Exists)
                 {
-                    return true;
-                }
-                else
-                {
-                    Console.WriteLine($"Your input database '{db.FullName}' is not a LogCenter database or could not be read.");
+                    if (IsLogCenterDb(db))
+                    {
+                        return (true, db);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Your input database '{fileSpec}' is not a LogCenter database or could not be read.");
+                    }
                 }
             }
-            else
-            {
-                Console.WriteLine($"Your input database '{db.FullName}' could not be found.");
-            }
-            return false;
+            catch (IOException)
+            { }
+
+            Console.WriteLine($"Your input database '{fileSpec}' could not be found.");
+            return (false, db);
         }
+
         static void Main(string[] args)
         {
-
             bool dlh = false;
+            bool plain = true;
 
-            var input = new List<FileInfo>();
+            var input = new Dictionary<string, FileInfo>();
             var startInfo = new Queue<string>(args);
 
             while (startInfo.Count > 0)
@@ -46,6 +58,11 @@ namespace Sqlite.Synology.LogCenter
                 {
                     switch (arg.ToLowerInvariant())
                     {
+                        case "fritz":
+                            plain = false;
+                            _ = startInfo.Dequeue();
+                            break;
+
                         case "dsl-link-history":
                         case "dlh":
 
@@ -55,29 +72,40 @@ namespace Sqlite.Synology.LogCenter
 
                         case "--help":
                         case "--?":
-                            Console.WriteLine($"Usage : ./LogCenterRewrite [[database] database2 ....] options");
+                            Console.WriteLine($"Usage : ./LogCenterRewrite options [[database] database2 ....]");
+                            Console.WriteLine();
+                            Console.WriteLine("Perform a merge of the input databases. Can reprocess FritzBOX Syslog databases with the 'fritz' option.");
+                            Console.WriteLine();
                             Console.WriteLine("Options:");
-                            Console.WriteLine("dlh, dsl-link-history\t\tExports the link speed history of your DSL connection.");
+                            Console.WriteLine("\tfritz\t\tAdjusts timestamps from 1970 in the log(s) and reprocesses repeating messages.");
+                            Console.WriteLine("\tdlh\t\tExports the link speed history of your DSL connection.");
+                            Console.WriteLine("\tdsl-link-history");
                             return;
                     }
                 }
                 if (startInfo.Count > 0)
                 {
-                    var dbArg = new FileInfo(startInfo.Dequeue());
+                    var dbSpec = CheckFile(startInfo.Dequeue());
 
-                    if (CheckFile(dbArg) == false) return;
-
-                    input.Add(dbArg);
+                    if (dbSpec.Item1 == false) return;
+                    if (input.ContainsKey(dbSpec.Item2.FullName) == false)
+                        input.Add(dbSpec.Item2.FullName, dbSpec.Item2);
+                    else
+                        Console.WriteLine($"Ignore duplicate reference of '{dbSpec.Item2.FullName}'.");
                 }
             }
-            if (input.Count == 0) input.Add(new FileInfo("SYNOSYSLOGDB_fritz.box.DB"));
 
-            var db = input.First();
+            if (input.Count == 0 && plain) return;
 
-            if (CheckFile(db) == false) return;
+            if (input.Count == 0) input.Add(string.Empty, new FileInfo(SynoSysLogDb("fritz.box")));
 
-            string hostName;
-            if (GetHostNameFromFile(db, out FileInfo exportCsv, out FileInfo parsedCsv, out hostName) == false)
+            var db = input.First().Value;
+
+            if (CheckFile(db.FullName).Item1 == false) return;
+
+            FileInfo parsedCsv = null;
+            string hostName = null;
+            if (plain == false && GetHostNameFromFile(db, out FileInfo exportCsv, out parsedCsv, out hostName) == false)
             {
                 Console.WriteLine($"The first input database should have your Fritz's hostname in the filename.");
                 return;
@@ -87,22 +115,26 @@ namespace Sqlite.Synology.LogCenter
             db.CopyTo(dest.FullName, true);
 
 
-            var messages = new Dictionary<int, Dictionary<string, FritzEvent>>();
+            var messages = new Dictionary<int, Dictionary<string, SysLogEvent>>();
 
             long newid = 1;
 
             using (var target = OpenDatabase(dest, true)) { }
-
+            if (plain)
+            {
+                PlainProcessing(input.Values.ToList(), dest);
+                return;
+            }
             using (var parsed = new StreamWriter(parsedCsv.FullName))
             {
                 long offset = 0;
                 long lastId;
-                foreach (var src in input)
+                foreach (var src in input.Values)
                 {
 
                     using (var con = OpenDatabase(src))
                     {
-                        var cmd = new SqliteCommand("select * from logs order by utcsec, r_utcsec, ID", con);
+                        var cmd = new SqliteCommand($"select {SysLogEvent.FieldList} from logs order by utcsec, r_utcsec, ID", con);
                         var reader = cmd.ExecuteReader();
 
                         _ = GetHostNameFromFile(src, out exportCsv, out FileInfo _, out string _);
@@ -110,16 +142,15 @@ namespace Sqlite.Synology.LogCenter
                         {
                             ReadRows(reader, messages, offset, out lastId, export);
                         }
-
                     }
 
                     offset += 100 + lastId;
                 }
 
-                var cached = new List<FritzEvent>();
+                var cached = new List<SysLogEvent>();
                 var repeats = new List<FritzRepeatedEvent>();
                 var lastRepeats = new Dictionary<string, FritzRepeatedEvent>();
-                FritzEvent previous = default;
+                SysLogEvent previous = default;
 
                 foreach (var day in messages.Keys.OrderBy(d => d))
                 {
@@ -131,7 +162,7 @@ namespace Sqlite.Synology.LogCenter
                         {
                             cached.Add(m);
 
-                            Match match = regexrepeatsFilter.Match(m.message);
+                            Match match = regexRepeatsFilter.Match(m.message);
 
                             if (match.Success)
                             {
@@ -169,13 +200,13 @@ namespace Sqlite.Synology.LogCenter
                         cached.Remove(cached.Single(r => r.id == m.id));
                     }
                 }
-
+                parsed?.WriteLine(SysLogEvent.FieldList.Replace(',', ';'));
                 using (var target = OpenDatabase(dest))
                 {
                     foreach (var m in cached)
                     {
                         m.WriteRow(target, newid++);
-                        parsed?.WriteLine($"{m.LocalTime.ToString("yyyy-MM-ddTHH:mm:ss")};{m.host};{m.ip};{m.message}");
+                        parsed?.WriteLine($"{newid - 1};{m.host};{m.ip};kern;info;info;06;{m.LocalTime.ToString("yyyy-MM-ddTHH:mm:ss")};{m.RecordedTime.ToString("yyyy-MM-ddTHH:mm:ss")};{m.program};{m.message};");
                     }
                     VacuumDatabase(target);
                 }
@@ -204,15 +235,47 @@ namespace Sqlite.Synology.LogCenter
             }
 
         }
+        static void PlainProcessing(List<FileInfo> sources, FileInfo destination)
+        {
+            var data = new List<SysLogEvent>();
+            foreach (var src in sources)
+            {
+                using (var db = OpenDatabase(src))
+                {
+                    var cmd = new SqliteCommand($"select {SysLogEvent.FieldList} from logs order by utcsec, r_utcsec, ID", db);
+                    var reader = cmd.ExecuteReader();
+
+                    DateTime ts = default;
+                    // lastId = multiTableOffset;
+                    if (reader.HasRows)
+                    {
+                        var values = new object[reader.FieldCount];
+                        while (reader.Read())
+                        {
+                            reader.GetValues(values);
+                            var m = new SysLogEvent(reader, 0);
+                            data.Add(m);
+                        }
+                    }
+                }
+            }
+
+            using (var db = OpenDatabase(destination))
+            {
+                int newId = 0;
+                foreach (var row in data.OrderBy(e => e.recorded_utcsec).ThenBy(e => e.id))
+                    row.WriteRow(db, ++newId);
+
+            }
+        }
         static bool GetHostNameFromFile(FileInfo fileInfo, out FileInfo exportCsv, out FileInfo parsedCsv, out string name)
         {
             name = string.Empty;
-            Regex hostName = new Regex(@"^.*SYNOSYSLOGDB_(.*)\.DB$");
 
             parsedCsv = new FileInfo(fileInfo.FullName + ".parsed.csv");
             exportCsv = new FileInfo(fileInfo.FullName + ".csv");
 
-            var match = hostName.Match(fileInfo.FullName);
+            var match = regexHostName.Match(fileInfo.FullName);
             if (match.Success)
             {
                 name = match.Groups[1].Value;
@@ -222,7 +285,7 @@ namespace Sqlite.Synology.LogCenter
             }
             return false;
         }
-        private static void ReadRows(SqliteDataReader reader, Dictionary<int, Dictionary<string, FritzEvent>> messages, long multiTableOffset, out long lastId, StreamWriter export = null)
+        private static void ReadRows(SqliteDataReader reader, Dictionary<int, Dictionary<string, SysLogEvent>> messages, long multiTableOffset, out long lastId, StreamWriter export = null)
         {
             DateTime ts = default;
             lastId = multiTableOffset;
@@ -266,10 +329,10 @@ namespace Sqlite.Synology.LogCenter
                     }
 
 
-                    var m = new FritzEvent(reader, multiTableOffset);
+                    var m = new SysLogEvent(reader, multiTableOffset);
                     if (lastId < m.id) lastId = m.id;
 
-                    if (messages.ContainsKey(m.DateNumber) == false) messages.Add(m.DateNumber, new Dictionary<string, FritzEvent>());
+                    if (messages.ContainsKey(m.DateNumber) == false) messages.Add(m.DateNumber, new Dictionary<string, SysLogEvent>());
                     if (messages[m.DateNumber].ContainsKey(m.Key) == false)
                     {
                         messages[m.DateNumber].Add(m.Key, m);
@@ -290,12 +353,11 @@ namespace Sqlite.Synology.LogCenter
 
         static bool IsLogCenterDb(FileInfo fileInfo)
         {
-
             try
             {
                 using (var con = OpenDatabase(fileInfo))
                 {
-                    var cmd = new SqliteCommand($"select count(*) from (select {fields} from logs limit 1)", con);
+                    var cmd = new SqliteCommand($"select count(*) from (select {SysLogEvent.FieldList} from logs limit 1)", con);
                     var reader = cmd.ExecuteReader();
                     reader.Read();
                     var rows = (long)reader.GetValue(0);
@@ -341,6 +403,23 @@ namespace Sqlite.Synology.LogCenter
                 result.Add(values);
             }
             return result;
+        }
+        private static string GetExactPathName(string pathName)
+        {
+            if (!(File.Exists(pathName) || Directory.Exists(pathName))) return pathName;
+
+            var di = new DirectoryInfo(pathName);
+
+            if (di.Parent != null)
+            {
+                return Path.Combine(
+                    GetExactPathName(di.Parent.FullName),
+                    di.Parent.GetFileSystemInfos(di.Name)[0].Name);
+            }
+            else
+            {
+                return di.FullName.ToUpper();
+            }
         }
     }
 }

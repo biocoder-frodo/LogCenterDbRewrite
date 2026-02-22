@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 
 namespace Sqlite.Synology.LogCenter
@@ -16,7 +14,7 @@ namespace Sqlite.Synology.LogCenter
         internal long id;
         internal long? firstId;
 
-        public FritzRepeatedEvent(Match match, FritzEvent fritzEvent, List<FritzEvent> fritzEvents)
+        public FritzRepeatedEvent(Match match, SysLogEvent fritzEvent, List<SysLogEvent> fritzEvents)
         {
             id = fritzEvent.id;
             program = fritzEvent.program;
@@ -25,8 +23,8 @@ namespace Sqlite.Synology.LogCenter
             message = match.Groups["message"].Value;
             count = int.Parse(match.Groups["count"].Value);
             
-            var srch = fritzEvents.Where(e => ((e.utcsec - ts) < 2 && (e.utcsec - ts) > -2) && e.message == message);
-            if (srch.Any()) firstId = srch.Single().id;
+            var srch = fritzEvents.Where(e => ((e.utcsec - ts) < 2 && (e.utcsec - ts) > -2) && e.message == message).OrderBy(s => s.LocalTime.ToUniversalTime()).ToList();
+            if (srch.Any()) firstId = srch.Last().id;
         }
 
         public string Key => $"{ts}_{message}";
