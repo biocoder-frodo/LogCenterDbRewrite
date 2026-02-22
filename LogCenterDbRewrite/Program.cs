@@ -33,16 +33,14 @@ namespace Sqlite.Synology.LogCenter
                     }
                     else
                     {
-                        Console.WriteLine($"Your input database '{db.FullName}' is not a LogCenter database or could not be read.");
+                        Console.WriteLine($"Your input database '{fileSpec}' is not a LogCenter database or could not be read.");
                     }
                 }
             }
-            catch (FileNotFoundException)
-            {
+            catch (IOException)
+            { }
 
-            }
-
-            Console.WriteLine($"Your input database '{db.FullName}' could not be found.");
+            Console.WriteLine($"Your input database '{fileSpec}' could not be found.");
             return (false, db);
         }
 
@@ -75,8 +73,13 @@ namespace Sqlite.Synology.LogCenter
                         case "--help":
                         case "--?":
                             Console.WriteLine($"Usage : ./LogCenterRewrite options [[database] database2 ....]");
+                            Console.WriteLine();
+                            Console.WriteLine("Perform a merge of the input databases. Can reprocess FritzBOX Syslog databases with the 'fritz' option.");
+                            Console.WriteLine();
                             Console.WriteLine("Options:");
-                            Console.WriteLine("dlh, dsl-link-history\t\tExports the link speed history of your DSL connection.");
+                            Console.WriteLine("\tfritz\t\tAdjusts timestamps from 1970 in the log(s) and reprocesses repeating messages.");
+                            Console.WriteLine("\tdlh\t\tExports the link speed history of your DSL connection.");
+                            Console.WriteLine("\tdsl-link-history");
                             return;
                     }
                 }
