@@ -14,7 +14,7 @@ namespace Sqlite.Synology.LogCenter
         internal long id;
         internal long? firstId;
 
-        public FritzRepeatedEvent(Match match, FritzEvent fritzEvent, List<FritzEvent> fritzEvents)
+        public FritzRepeatedEvent(Match match, SysLogEvent fritzEvent, List<SysLogEvent> fritzEvents)
         {
             id = fritzEvent.id;
             program = fritzEvent.program;

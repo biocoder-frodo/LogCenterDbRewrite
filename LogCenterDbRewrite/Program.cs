@@ -112,7 +112,7 @@ namespace Sqlite.Synology.LogCenter
             db.CopyTo(dest.FullName, true);
 
 
-            var messages = new Dictionary<int, Dictionary<string, FritzEvent>>();
+            var messages = new Dictionary<int, Dictionary<string, SysLogEvent>>();
 
             long newid = 1;
 
@@ -131,7 +131,7 @@ namespace Sqlite.Synology.LogCenter
 
                     using (var con = OpenDatabase(src))
                     {
-                        var cmd = new SqliteCommand($"select {FritzEvent.FieldList} from logs order by utcsec, r_utcsec, ID", con);
+                        var cmd = new SqliteCommand($"select {SysLogEvent.FieldList} from logs order by utcsec, r_utcsec, ID", con);
                         var reader = cmd.ExecuteReader();
 
                         _ = GetHostNameFromFile(src, out exportCsv, out FileInfo _, out string _);
@@ -144,10 +144,10 @@ namespace Sqlite.Synology.LogCenter
                     offset += 100 + lastId;
                 }
 
-                var cached = new List<FritzEvent>();
+                var cached = new List<SysLogEvent>();
                 var repeats = new List<FritzRepeatedEvent>();
                 var lastRepeats = new Dictionary<string, FritzRepeatedEvent>();
-                FritzEvent previous = default;
+                SysLogEvent previous = default;
 
                 foreach (var day in messages.Keys.OrderBy(d => d))
                 {
@@ -197,7 +197,7 @@ namespace Sqlite.Synology.LogCenter
                         cached.Remove(cached.Single(r => r.id == m.id));
                     }
                 }
-                parsed?.WriteLine(FritzEvent.FieldList.Replace(',', ';'));
+                parsed?.WriteLine(SysLogEvent.FieldList.Replace(',', ';'));
                 using (var target = OpenDatabase(dest))
                 {
                     foreach (var m in cached)
@@ -234,12 +234,12 @@ namespace Sqlite.Synology.LogCenter
         }
         static void PlainProcessing(List<FileInfo> sources, FileInfo destination)
         {
-            var data = new List<FritzEvent>();
+            var data = new List<SysLogEvent>();
             foreach (var src in sources)
             {
                 using (var db = OpenDatabase(src))
                 {
-                    var cmd = new SqliteCommand($"select {FritzEvent.FieldList} from logs order by utcsec, r_utcsec, ID", db);
+                    var cmd = new SqliteCommand($"select {SysLogEvent.FieldList} from logs order by utcsec, r_utcsec, ID", db);
                     var reader = cmd.ExecuteReader();
 
                     DateTime ts = default;
@@ -250,7 +250,7 @@ namespace Sqlite.Synology.LogCenter
                         while (reader.Read())
                         {
                             reader.GetValues(values);
-                            var m = new FritzEvent(reader, 0);
+                            var m = new SysLogEvent(reader, 0);
                             data.Add(m);
                         }
                     }
@@ -282,7 +282,7 @@ namespace Sqlite.Synology.LogCenter
             }
             return false;
         }
-        private static void ReadRows(SqliteDataReader reader, Dictionary<int, Dictionary<string, FritzEvent>> messages, long multiTableOffset, out long lastId, StreamWriter export = null)
+        private static void ReadRows(SqliteDataReader reader, Dictionary<int, Dictionary<string, SysLogEvent>> messages, long multiTableOffset, out long lastId, StreamWriter export = null)
         {
             DateTime ts = default;
             lastId = multiTableOffset;
@@ -326,10 +326,10 @@ namespace Sqlite.Synology.LogCenter
                     }
 
 
-                    var m = new FritzEvent(reader, multiTableOffset);
+                    var m = new SysLogEvent(reader, multiTableOffset);
                     if (lastId < m.id) lastId = m.id;
 
-                    if (messages.ContainsKey(m.DateNumber) == false) messages.Add(m.DateNumber, new Dictionary<string, FritzEvent>());
+                    if (messages.ContainsKey(m.DateNumber) == false) messages.Add(m.DateNumber, new Dictionary<string, SysLogEvent>());
                     if (messages[m.DateNumber].ContainsKey(m.Key) == false)
                     {
                         messages[m.DateNumber].Add(m.Key, m);
@@ -354,7 +354,7 @@ namespace Sqlite.Synology.LogCenter
             {
                 using (var con = OpenDatabase(fileInfo))
                 {
-                    var cmd = new SqliteCommand($"select count(*) from (select {FritzEvent.FieldList} from logs limit 1)", con);
+                    var cmd = new SqliteCommand($"select count(*) from (select {SysLogEvent.FieldList} from logs limit 1)", con);
                     var reader = cmd.ExecuteReader();
                     reader.Read();
                     var rows = (long)reader.GetValue(0);

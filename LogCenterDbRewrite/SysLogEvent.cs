@@ -6,7 +6,7 @@ using System.Linq;
 
 namespace Sqlite.Synology.LogCenter
 {
-    struct FritzEvent
+    struct SysLogEvent
     {
         internal readonly long id;
         public readonly string host;
@@ -29,7 +29,7 @@ namespace Sqlite.Synology.LogCenter
 
         private static readonly IReadOnlyList<logs> fields = (logs[])Enum.GetValues(typeof(logs));
         internal static readonly string FieldList = fields.Aggregate("", (s, a) => $"{s}{a},", (a) => a.Substring(0, a.Length - 1));
-        private static readonly Dictionary<logs, Func<FritzEvent, string>> _writeMap = new Dictionary<logs, Func<FritzEvent, string>>()
+        private static readonly Dictionary<logs, Func<SysLogEvent, string>> _writeMap = new Dictionary<logs, Func<SysLogEvent, string>>()
         {
             { logs.id      , e=> Field(e.id) },
             { logs.host    , e=> Field(e.host) },
@@ -48,7 +48,7 @@ namespace Sqlite.Synology.LogCenter
         };
         private static string Field(long value) => value.ToString();
         private static string Field(string value) => $"'{value.Replace(@"'", "''")}'";
-        public FritzEvent(SqliteDataReader reader, long multiTableOffset = 0)
+        public SysLogEvent(SqliteDataReader reader, long multiTableOffset = 0)
         {
             id = reader.GetValue<long>(logs.id) + multiTableOffset;
             host = reader.GetText(logs.host);
